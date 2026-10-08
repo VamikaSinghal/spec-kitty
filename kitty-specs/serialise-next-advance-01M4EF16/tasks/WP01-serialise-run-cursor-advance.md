@@ -19,6 +19,9 @@ requirement_refs:
 planning_base_branch: issue-5854-serialise-next
 merge_target_branch: issue-5854-serialise-next
 branch_strategy: Planning artifacts for this mission were generated on issue-5854-serialise-next. During /spec-kitty.implement this WP may branch from a dependency-specific base, but completed changes must merge back into issue-5854-serialise-next unless the human explicitly redirects the landing branch.
+base_branch: kitty/mission-serialise-next-advance-01M4EF16
+base_commit: 4b62559907f4cf481d7ede02f50d78a3fa5c5438
+created_at: '2026-10-08T19:50:49.778477+00:00'
 subtasks:
 - T001
 - T002
