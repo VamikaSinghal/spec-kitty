@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 _4.0.0rc7 candidate cycle. Entries land here until the release chore finalizes
 this section at publish._
 
+### Fixed
+
+- **Concurrent `spec-kitty next` on one mission run is serialised** (#5854, #5682). **Before:** two overlapping advances could both pass the stale check and complete a step neither caller evaluated — the review step marked done while the work package sat in `for_review`, the loop reporting `terminal` — and the engine path re-planned a stale advance as `success`. Now the advance carries the caller-evaluated `issued_step_id` and refuses (`StaleAdvancePlan`) when the run cursor moved past it, a per-run-directory lock (`kernel.locks`) serialises the cursor read-modify-write across `commit_advance`, `provide_decision_answer` and the retrospective-rollback writer, snapshot writes use a unique staging temp, and the engine path refuses a stale or lock-contended advance with a `blocked` decision (reusing the existing `next` contract — no new kind or exit code) instead of re-applying `success`. See ADR [2026-10-08-1](adr/4.x/2026-10-08-1-serialise-run-dir-advance.md). Residual: a refusing stale path can make a retry loop spin on `blocked` (the livelock guard #5112, out of scope).
+
 ## [4.0.0rc6] - 2026-10-08
 
 ### Upgrade Notes
