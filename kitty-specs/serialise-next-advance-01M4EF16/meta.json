@@ -28,6 +28,7 @@
   "purpose_context": "Concurrent spec-kitty next invocations on one run are not serialised (#5854), and two overlapping next --result success calls complete whatever step is issued at the second read (#5682). This mission closes both by recording the caller-evaluated step and refusing a stale advance, and by holding a per-run-dir lock across the read-modify-write of the run cursor.",
   "purpose_tldr": "Make advancing a mission run serialised: a stale advance is refused with a named reason, never silently re-planned as success; at most one next mutates a run at a time.",
   "slug": "serialise-next-advance-01M4EF16",
+  "status_phase": "1",
   "target_branch": "issue-5854-serialise-next",
   "topology": "coord",
   "vcs": "git",
