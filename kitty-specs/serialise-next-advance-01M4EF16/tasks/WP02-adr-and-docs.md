@@ -5,7 +5,9 @@ dependencies:
 - WP01
 requirement_refs:
 - FR-005
-- SC-001
+planning_base_branch: issue-5854-serialise-next
+merge_target_branch: issue-5854-serialise-next
+branch_strategy: Planning artifacts for this mission were generated on issue-5854-serialise-next. During /spec-kitty.implement this WP may branch from a dependency-specific base, but completed changes must merge back into issue-5854-serialise-next unless the human explicitly redirects the landing branch.
 subtasks:
 - T009
 - T010

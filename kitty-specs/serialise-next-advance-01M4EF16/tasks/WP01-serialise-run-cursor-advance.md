@@ -16,6 +16,9 @@ requirement_refs:
 - SC-002
 - SC-003
 - SC-004
+planning_base_branch: issue-5854-serialise-next
+merge_target_branch: issue-5854-serialise-next
+branch_strategy: Planning artifacts for this mission were generated on issue-5854-serialise-next. During /spec-kitty.implement this WP may branch from a dependency-specific base, but completed changes must merge back into issue-5854-serialise-next unless the human explicitly redirects the landing branch.
 subtasks:
 - T001
 - T002
@@ -167,13 +170,19 @@ Key current-main anchors (verified @ c0a08ad6):
        run-cursor lock in the test, then call the commit path with a short
        blocking timeout and assert it raises `LockAcquireTimeout` (i.e. the commit
        path really takes the lock). Red when the lock is removed from the commit.
+       **Same-fixture positive control (required, non-vacuity):** on the SAME
+       fixture with the lock free, an uncontended commit completes and issues the
+       next step — so the negative assertion proves the lock, not an unrelated
+       timeout.
      - **provide_decision_answer under lock** (pins T006): same held-lock-blocks
        probe against `provide_decision_answer`; plus a no-overlap positive control
        that records the answer.
-     - **unique-temp collision pair** (pins T004): two writers to one run_dir —
-       demonstrate the discriminating assertion that the FIXED `state.json.tmp`
-       name is a shared path and a unique name is not (assert the staging path is
-       unique per write; a same-fixture pair where the fixed name would collide).
+     - **unique-temp collision pair** (pins T004): the discriminating same-fixture
+       pair from FR-006 — two writers to one run_dir corrupt/lose a write under the
+       FIXED `state.json.tmp` name and both succeed under unique temp names. (Drive
+       the two writers into the shared staging window deterministically — a
+       `monkeypatch`/interleave on the stage-then-replace, not a filename-equality
+       proxy.)
   - Mark the behavioral race repros `@pytest.mark.p0_repro(issue=5682)` /
     `(issue=5854)` and `@pytest.mark.regression` while red (they run in the
     nightly p0-repro lane); remove `p0_repro` and keep `regression` once green.
@@ -286,7 +295,10 @@ Key current-main anchors (verified @ c0a08ad6):
 - **Steps**:
   1. Run the repros: confirm each was RED on the base and is now GREEN.
   2. Half-by-half: revert each part in turn (CAS, engine-refusal, answer-guard,
-     lock, unique-temp) and confirm at least one test goes red; restore.
+     lock, unique-temp) and confirm at least one test goes red; restore. **Record
+     the five-row revert→red-witness mapping (which part reverted → which named
+     test went red) in the PR's Tests-run section**, so the reviewer can verify
+     SC-003 objectively rather than trust an unverifiable claim.
   3. Blast radius: `make test-fast`; `pytest tests/runtime tests/next
      tests/specify_cli/next -q`; the stress test serially
      (`-m stress -p no:xdist`); the targeted gates
