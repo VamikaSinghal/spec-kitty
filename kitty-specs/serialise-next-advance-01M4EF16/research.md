@@ -315,6 +315,50 @@ outside its boundary):
    #5099, #5853, #5855. **Folded:** the `provide_decision_answer` race (file a
    follow-up issue or cover it in the PR body).
 
+## Post-spec squad (reviewer-renata + doctrine-daphne)
+
+Run on the committed `spec.md`. Both profile-loaded, read-only.
+
+- **doctrine-daphne — PASS, no blocking findings.** The run-cursor lock is a
+  distinct resource over the ONE canonical primitive (`kernel.locks`), not a
+  second authority; the expected-step CAS EXTENDS `commit_advance`'s
+  `StaleAdvancePlan` (one staleness authority, widened window); terminology clean
+  (zero `feature` hits; legacy `feature-runs.json` correctly left frozen);
+  FR-005 reuses the ADR `2026-02-17-1` `next` contract; a NEW `docs/adr/4.x/` ADR
+  is the right home. Two **plan-phase** notes (both **accepted**, carried into the
+  plan): (1) state explicitly that the CAS folds into `commit_advance`'s
+  `StaleAdvancePlan` path, not a parallel bridge gate; (2) the new ADR
+  cross-references ADR `2026-02-17-1` and cites the run-index lock as same-primitive
+  precedent.
+- **reviewer-renata — one HIGH acceptance gap, all CHANGE dispositions accepted
+  and applied to `spec.md`.** The three synchronous-injection repros are satisfied
+  by the CAS alone, so the LOCK (the structural closure) and the unique-temp were
+  at risk of shipping untested (half-fix-still-green). Applied:
+  - SC-003 reworded to a per-part half-by-half map; the lock is pinned by a
+    deterministic "commit blocks while the lock is held" test AND a
+    barrier-synchronised true-concurrency advance/advance test (red with the lock
+    removed, CAS retained); the unique-temp by a same-fixture collision pair.
+    (**accepted** — spec.md SC-003.)
+  - FR-003 reworded: discriminating lock controls, not CAS-satisfiable; US3 raised
+    to **P1** (the lock is structural closure, not a deferrable P2). (**accepted**.)
+  - FR-004: lock + re-read controls, incl. the held-lock-blocks discriminator.
+    (**accepted**.)
+  - FR-006: discriminating same-fixture collision pair (fixed name corrupts, unique
+    succeeds), not the self-collision-immune control. (**accepted**.)
+  - NFR-001: restated as the structural invariant (lock span excludes executor
+    dispatch); "well under 10 s" demoted to informational. (**accepted**.)
+  - NFR-002: gated on the acquire/release COUNT (exactly one, uncontended); "< 2 s"
+    informational. (**accepted**.)
+  - FR-001: citation fixed to one same-fixture positive control per path (US1 S2 +
+    FR-002). (**accepted**.)
+  - Renata's non-findings (FR-002, FR-005, C-004 are sound) **noted**.
+
+**Net effect on the design:** the lock is NOT redundant with the CAS — the CAS
+closes the bootstrap→commit *staleness* window (synchronous/overlapping reads),
+the lock closes the *true-concurrency TOCTOU* where two writers both pass the CAS
+(both re-read the same cursor before either writes) and both append. Both are
+load-bearing and each is now independently pinned.
+
 **Findings disposition (squad contract):** every squad finding above is
 **accepted** into this adjudicated design and the spec/plan will carry it, except
 the contention-vs-`blocked` semantic concern, which is **changed** (resolved by
