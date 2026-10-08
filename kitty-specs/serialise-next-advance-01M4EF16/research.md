@@ -225,4 +225,99 @@ required modifications.**
 
 ## Implementer lens (adversarial squad — implementer-ivan)
 
-_To be appended when the squad returns._
+Profile-loaded (`implementer-ivan`), `--action implement` doctrine (ATDD-first,
+smallest-viable-diff, locality). Read-only; ran both existing pins (PASS today,
+121s wall). Verdict: **a deterministic NO-SLEEP red-first repro is achievable for
+all three races with the existing harness.**
+
+- **Prior art — REUSE VERBATIM:** `tests/next/test_engine_commit_primitives.py`
+  `::test_stale_plan_raises_and_writes_nothing` (~209-231) already proves the
+  engine PRIMITIVE is serialisable (plan → peer `next_step` → `commit_advance`
+  raises `StaleAdvancePlan`, files byte-identical). The bug is at the BRIDGE +
+  `provide_decision_answer`, not the engine primitive. Its `_start` scaffold
+  (~51) is the lightest deterministic path (3-line `mission.yaml` →
+  `start_mission_run`, no git/charter).
+- **Prior art — INVERT, DO NOT DELETE:** `tests/next/test_runtime_bridge_unit.py`
+  `::test_pre_resolution_is_not_reused_for_a_different_issued_step` (~2442-2465)
+  currently PINS the #5854 fallback (asserts `runtime_next_step` is still called
+  on stale). Invert: keep the `_stale` `commit_advance` monkeypatch; assert
+  `_dn_decision_materialize(ctx)` returns `kind=blocked` and `runtime_next_step`
+  is called **0** times. Reuses `_at_implement` (~2377) + `_run_bytes` (~2410).
+- **Repro seams (synchronous injected interleave — no thread, no sleep):**
+  - #5682 **composition** path: monkeypatch
+    `runtime_bridge_composition._dispatch_via_composition` (def ~524, called at
+    `runtime_bridge.py:1023`) to run ONE peer `engine.next_step(...)` after the
+    real dispatch — exactly the bootstrap→plan window; assert the outer
+    `decide_next_via_runtime` returns `blocked`.
+  - #5854 **engine** path: (2a) bridge-level inversion above; (2b) end-to-end —
+    wrap `commit_advance` so first entry runs a peer advance (so the real
+    `commit_advance` then legitimately raises), assert `blocked` and no second
+    caller-attributable `NextStepAutoCompleted`.
+  - `provide_decision_answer` race: monkeypatch `engine._read_snapshot` (~123)
+    one-shot to run a peer `next_step` between the answer's read and its write;
+    assert neither mutation is lost. Reuses
+    `tests/next/test_provide_decision_answer_characterisation.py::_input_run`.
+- **Markers / lane (per `pytest.ini:79-82`, ADR `2026-07-17-1`):** the injected
+  interleaves are single-process/thread/deterministic → `@pytest.mark.p0_repro(
+  issue=5682|5854)` + `regression` **while the bug is open** (nightly `p0-repro`
+  lane only); the fix PR **removes `p0_repro`** and keeps `regression` (per-PR).
+  They do NOT need `stress`/`timing`. At most ONE optional `stress`-marked
+  barrier test (pattern from `test_run_index_portability_regression.py`) as a
+  belt-and-braces lock proof; it is parallel-unsafe.
+- **Fixtures:** lightest engine-only =
+  `tests/next/test_engine_commit_primitives.py::_start` (~51); composition-capable
+  = `tests/runtime/_next_mission_scaffold.py::scaffold_software_dev` (~136) +
+  `advance_to_step` (~164) (needs mission-type activation; ~25s setup — keep
+  composition repros few); bridge ctx = `rb._dn_bootstrap(...)`; decision-answer =
+  `test_provide_decision_answer_characterisation.py::_input_run`/`_start`.
+- **BIGGEST RISK — scope under-reach.** A fix that only makes `_dn_advance_engine`
+  refuse ships a green #5854 test while #5682 (which also hits the "safe"
+  composition path) and the unguarded `provide_decision_answer` RMW stay live.
+  **The acceptance matrix MUST carry all three red-first tests as the gate**, and
+  ONE per-run-dir lock + the bootstrap-anchored CAS must cover the advance AND
+  `provide_decision_answer`.
+
+## Adjudicated design (synthesis of both lenses — the spec/plan basis)
+
+On the one divergence (lock scope), adjudicated **from source** toward the
+architect lens (lock-scope is its lens; the implementer conceded the mechanism is
+outside its boundary):
+
+1. **Expected-step CAS (closes the bootstrap→plan window).** Thread the
+   bootstrap-evaluated `issued_step_id` (`DecideNextContext.current_step_id`,
+   `runtime_bridge.py:552`) into `plan_advance`/`commit_advance` on BOTH paths.
+   At commit, under the lock, re-read `state.json` and REFUSE
+   (`StaleAdvancePlan`) when the on-disk `issued_step_id` ≠ the bootstrap-expected
+   step. This catches a peer that landed at any point since bootstrap — the lock
+   need not span the executor.
+2. **Short commit-span per-run-dir lock (atomizes the RMW).** A dedicated
+   `<run_dir>/state.json.lock` via `kernel.locks.machine_file_lock` (blocking,
+   ~10s timeout), acquired just before the commit re-read and released after
+   `_write_snapshot` — around `_commit_advance` (`engine.py:529-571`), the commit
+   leg of `advance_run_state_after_composition` (`runtime_bridge_engine.py:266`),
+   `provide_decision_answer` (`engine.py:797-873`), and the retrospective rollback
+   writer (`runtime_bridge.py:1111/1121`, with its capture inside the same span).
+   **NOT** held across composition dispatch (`runtime_bridge.py:1023`). Run-start
+   (`start_mission_run`) stays lock-free (private run_dir until index-published).
+3. **Unique temp in `_write_snapshot`** (`engine.py:135`) — mkstemp/`atomic_write`
+   shape; lands independently of the lock.
+4. **`_dn_advance_engine` refuses** (`runtime_bridge.py:1234-1248`): on
+   `StaleAdvancePlan` return a `blocked` Decision + named reason (mirror
+   composition's EDGE-003, `:1073`), and also catch `LockAcquireTimeout` → blocked;
+   no `runtime_next_step` fallback. Invert the existing pin.
+5. **Contract unchanged:** refusals reuse `kind=blocked` + `reason` + exit 1
+   (`next_cmd.py:372-373`); no new kind, no new exit code.
+6. **ADR:** add a short `docs/adr/4.x/` ADR recording the run-dir lock resource,
+   the index-released-before-run-dir ordering invariant, the commit-span-only
+   hold (NFR-002), and the expected-step CAS.
+7. **Residuals (not folded):** #5112 livelock (a refusing path can spin a retry
+   loop on `blocked`; CAS guarantees state integrity, not executor exactly-once);
+   #5099, #5853, #5855. **Folded:** the `provide_decision_answer` race (file a
+   follow-up issue or cover it in the PR body).
+
+**Findings disposition (squad contract):** every squad finding above is
+**accepted** into this adjudicated design and the spec/plan will carry it, except
+the contention-vs-`blocked` semantic concern, which is **changed** (resolved by
+reusing `blocked` per the existing EDGE-003 pattern) and the #5112 liveness gap,
+which is **deferred_with_rationale** (named out-of-scope residual; tracked by the
+existing #5112). No finding dropped.
