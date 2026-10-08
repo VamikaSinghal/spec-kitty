@@ -1,4 +1,16 @@
 {
+  "acceptance_history": [
+    {
+      "acceptance_mode": "pr",
+      "accepted_at": "2026-10-08T20:58:27.463058+00:00",
+      "accepted_by": "system",
+      "accepted_from_commit": "42ffc8e88a9ef17c668441fb1b9b6427da6f1620"
+    }
+  ],
+  "acceptance_mode": "pr",
+  "accepted_at": "2026-10-08T20:58:27.463058+00:00",
+  "accepted_by": "system",
+  "accepted_from_commit": "42ffc8e88a9ef17c668441fb1b9b6427da6f1620",
   "contracts": "none",
   "contracts_rationale": "Runtime concurrency fix: serialises the existing run-cursor read-modify-write and adds an internal compare-and-swap plus a lock sidecar. It defines no new external interface, API, or wire contract, so there is no contracts/ directory to author.",
   "coordination_branch": "kitty/mission-serialise-next-advance-01M4EF16",
