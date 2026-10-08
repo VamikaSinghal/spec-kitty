@@ -76,21 +76,30 @@ issues its next step (positive control).
 
 ---
 
-### User Story 3 - A run cursor has at most one writer at a time (Priority: P2)
+### User Story 3 - A run cursor has at most one writer at a time (Priority: P1)
 
-**Why this priority**: The lock is the structural closure of the defect class; it
-also covers `provide_decision_answer`, the third unguarded writer, so a
-`next --answer` cannot race an advance.
+**Why this priority**: The lock is the *structural closure* of the defect class —
+the one mechanism that closes the true-concurrency TOCTOU where two writers both
+pass the stale-check (both re-read the same cursor before either writes) and both
+append. The compare-and-swap alone does not close that window, so the lock is P1,
+not a deferrable follow-up. It also covers `provide_decision_answer`, the third
+unguarded writer, so a `next --answer` cannot race an advance.
 
-**Independent Test**: Two concurrent cursor mutations (advance/advance, or
-answer/advance) are serialised: exactly one commits, the other observes the change
-and refuses or reconciles; neither mutation is silently lost.
+**Independent Test**: Two cursor mutations (advance/advance, or answer/advance)
+are serialised. Pinned by a **deterministic** test that holds the run-cursor lock
+and asserts the commit path blocks on it (red when the lock is removed), plus a
+barrier-synchronised true-concurrency advance/advance test that is red with the
+lock removed but the compare-and-swap retained.
 
 **Acceptance Scenarios**:
 
-1. **Given** two cursor-mutating operations on one run, **When** they overlap,
-   **Then** their read→modify→write is serialised and no mutation is lost.
-2. **Given** an answer overlapping an advance, **When** both run, **Then** the
+1. **Given** the run-cursor lock is held, **When** a commit runs, **Then** it
+   blocks on the lock rather than proceeding (deterministic lock proof).
+2. **Given** two genuinely concurrent advances that both read the same issued
+   step, **When** they race into the commit window, **Then** exactly one commits
+   and the other observes the change and refuses — no double-append, no lost
+   write. With the lock removed (compare-and-swap retained) this scenario fails.
+3. **Given** an answer overlapping an advance, **When** both run, **Then** the
    answer survives and the advance is reconciled, not clobbered.
 
 ### Edge Cases
@@ -113,19 +122,19 @@ Addresses #5854 and #5682.
 
 | ID | Title | User Story | Priority | Status | Delivery | No-op passable? |
 |----|-------|------------|----------|--------|----------|-----------------|
-| FR-001 | Record the caller-evaluated step and refuse a changed cursor | As an orchestrator, I want an advance that was planned against one issued step to refuse when the run's issued step changed before it commits, so that no caller completes a step it never evaluated (#5682, both composition and engine paths). | High | Open | [build] | no — paired with FR-002's positive-control scenario (a non-overlapping advance completes) on the same fixture |
-| FR-002 | Engine path refuses a stale advance, never re-plans success | As an orchestrator, I want the engine advance path to return a `blocked` decision with a named reason on a stale plan and never re-apply `success` through `next_step`, so that it matches the composition path (#5854). | High | Open | [build] | no — same-fixture positive control: a non-stale engine advance still issues its next step |
-| FR-003 | Serialise the run-cursor read-modify-write | As an orchestrator, I want at most one operation mutating a given run's cursor at a time, so that two overlapping advances cannot both append events and last-write-wins the snapshot. | High | Open | [build] | no — positive control: two concurrent advances yield exactly one completion and one refusal; a lone advance completes |
-| FR-004 | Decision-answer participates in the same serialisation | As an operator, I want `provide_decision_answer` to serialise against a concurrent advance, so that a `next --answer` overlapping a `next` cannot silently lose either mutation. | Medium | Open | [build] | no — positive control: an answer with no overlap still records the answer and advances pending state |
-| FR-005 | Refusal reuses the existing next contract | As a harness, I want a refused stale/contended advance to surface as the existing `kind=blocked` + `reason` with exit 1, so that no new decision kind or exit code is introduced. | High | Open | [ratchet] | no — positive control: a passing advance still yields `step`/`terminal` and exit 0 on the same contract |
-| FR-006 | Snapshot writes use a unique staging file | As an orchestrator, I want each snapshot write staged under a unique temp name, so that two writers to the same run directory cannot collide on the staging path. | Medium | Open | [build] | no — positive control: a single writer still publishes a valid `state.json` |
+| FR-001 | Record the caller-evaluated step and refuse a changed cursor | As an orchestrator, I want an advance that was planned against one issued step to refuse when the run's issued step changed before it commits, so that no caller completes a step it never evaluated (#5682, both composition and engine paths). | High | Open | [build] | no — one same-fixture positive control per path: US1 Scenario 2 (composition, a non-overlapping advance completes) and FR-002's scenario (engine) |
+| FR-002 | Engine path refuses a stale advance, never re-plans success | As an orchestrator, I want the engine advance path to return a `blocked` decision with a named reason on a stale plan and never re-apply `success` through `next_step`, so that it matches the composition path (#5854). | High | Open | [build] | no — same-fixture positive control: a non-stale engine advance still issues its next step (the inverted fallback pin proves `next_step` CAN be called, so "0 calls on stale" discriminates) |
+| FR-003 | Serialise the run-cursor read-modify-write with a per-run lock | As an orchestrator, I want at most one operation mutating a given run's cursor at a time, so that two genuinely concurrent advances cannot both pass the stale-check, both append events, and last-write-wins the snapshot. | High | Open | [build] | no — discriminating controls: (i) a deterministic test holds the run-cursor lock and asserts a commit blocks on it (red when the lock is removed); (ii) a barrier-synchronised true-concurrency advance/advance test is red with the lock removed but the compare-and-swap retained. Not satisfied by the compare-and-swap alone. |
+| FR-004 | Decision-answer participates in the same serialisation | As an operator, I want `provide_decision_answer` to take the same per-run lock and re-read under it, so that a `next --answer` overlapping a `next` cannot silently lose either mutation. | Medium | Open | [build] | no — controls: an answer with no overlap records the answer and advances pending state; and (discriminating) the answer path blocks while the run-cursor lock is held (red when the lock is removed from this path) |
+| FR-005 | Refusal reuses the existing next contract | As a harness, I want a refused stale/contended advance to surface as the existing `kind=blocked` + `reason` with exit 1, so that no new decision kind or exit code is introduced. | High | Open | [ratchet] | no — positive control on the same refusal fixture: a passing advance still yields `step`/`terminal` and exit 0 on the same contract |
+| FR-006 | Snapshot writes use a unique staging file | As an orchestrator, I want each snapshot write staged under a unique temp name, so that two writers to the same run directory cannot collide on the staging path. | Medium | Open | [build] | no — discriminating same-fixture pair: two writers to one run directory corrupt/lose a write under the fixed `state.json.tmp` name and both succeed under unique temp names |
 
 ### Non-Functional Requirements
 
 | ID | Title | Requirement | Category | Priority | Status |
 |----|-------|-------------|----------|----------|--------|
-| NFR-001 | Bounded lock hold | The run-cursor lock is held only around the commit read-modify-write and never across step-contract executor dispatch; the hold stays well under the primitive's 10 s max-hold default so the 60 s stale-reclaim never triggers in normal operation. | Reliability | High | Open |
-| NFR-002 | CLI latency preserved | An uncontended `next` adds at most one lock acquire/release to the advance; the typical-project CLI budget (< 2 s) is preserved. | Performance | Medium | Open |
+| NFR-001 | Lock span excludes executor dispatch | The run-cursor lock is acquired only after composition executor dispatch returns and released around the commit read-modify-write — the lock span structurally never encloses step-contract executor dispatch (verifiable by asserting acquire/release ordering relative to dispatch). Keeping the hold short keeps it under the primitive's 10 s max-hold default so the 60 s stale-reclaim never triggers; the 10 s figure is an informational budget, not a wall-clock gate. | Reliability | High | Open |
+| NFR-002 | Bounded extra locking on the uncontended path | An uncontended `next` performs exactly one run-cursor lock acquire/release for its commit (verifiable by counting acquisitions). The typical-project CLI budget (< 2 s) is an informational target, not a pass/fail wall-clock gate. | Performance | Medium | Open |
 | NFR-003 | Single canonical lock primitive | All cross-process locking routes through `kernel.locks.machine_file_lock`; no raw OS lock or third-party lock is introduced (the `test_lock_primitive_ban.py` gate stays green with an empty allowlist). | Portability | High | Open |
 
 ### Constraints
@@ -153,5 +162,5 @@ Addresses #5854 and #5682.
 
 - **SC-001**: Two overlapping `next --result success` advances on one run never both complete a step — the later-committing one is refused with a named reason. — [build] · no-op passable: no (positive control: sequential advances both complete)
 - **SC-002**: With a WP in `for_review` and the cursor at `implement`, an overlapping stale advance can no longer mark `review` done or reach `terminal` with the WP unreviewed (the #5682 field symptom). — [build] · no-op passable: no
-- **SC-003**: Three deterministic, no-sleep red-first reproductions (the #5682 composition window, the #5854 engine double-apply, and the answer-vs-`next` race) are RED on the mission base and GREEN on the final commit; reverting any one independent part of the fix turns at least one of them red again. — [build] · no-op passable: no
+- **SC-003**: Each independent part of the fix is pinned by at least one test that goes RED when that part alone is reverted (half-by-half), so none can ship untested behind a green suite: (i) the compare-and-swap → the #5682 composition-window and engine-window repros; (ii) the engine-path refusal → the inverted fallback pin; (iii) the `provide_decision_answer` guard → the answer-vs-`next` repro; (iv) **the per-run lock → a deterministic "commit blocks while the lock is held" test AND a barrier-synchronised true-concurrency advance/advance test, both red with the lock removed but the compare-and-swap retained**; (v) the unique staging temp → the same-fixture collision pair (FR-006). All reproductions are deterministic and use barriers or injected interleaves, never sleeps. — [build] · no-op passable: no
 - **SC-004**: A refused advance produces the same `next` output shape (`kind=blocked` + `reason`, exit 1) as today's composition-path blocked output — no new kind, no new exit code. — [ratchet] · no-op passable: no (positive control: a passing advance yields `step`/`terminal`, exit 0)
