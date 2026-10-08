@@ -353,6 +353,37 @@ Run on the committed `spec.md`. Both profile-loaded, read-only.
     FR-002). (**accepted**.)
   - Renata's non-findings (FR-002, FR-005, C-004 are sound) **noted**.
 
+## Post-tasks squad (planner-priti + reviewer-renata)
+
+Run on the authored work packages, before the mutating `finalize-tasks`.
+
+- **planner-priti — SOUND AS-IS, no change required.** The 2-WP decomposition is
+  correctly sized (WP01's 8 subtasks are justified and irreducible — splitting
+  engine from bridge would manufacture a cross-lane `engine.py`/`runtime_bridge.py`
+  conflict and a cross-lane code dependency); ownership non-overlapping; WP02→WP01
+  dependency correct; full FR/NFR/SC coverage, no orphan subtasks; the stress test
+  correctly housed. Advisory delivery-risk note (**deferred_with_rationale**): WP01
+  is a heavy single session — monitor at implement time, do not restructure.
+- **reviewer-renata — DoDs substantially non-fakeable; four tightenings, all
+  applied before finalize.** The central lock-vs-CAS risk IS forced (the
+  deterministic held-lock-blocks test pins the lock per-PR; the barrier test is a
+  supplement). Applied:
+  - WP01 T001: added a same-fixture positive control to the commit-path
+    held-lock-blocks test (an uncontended commit completes) so the negative
+    assertion proves the lock, not an unrelated timeout. (**accepted**.)
+  - WP01 T008: require recording the five-row revert→red-witness mapping in the PR
+    so the reviewer can verify SC-003's half-by-half objectively. (**accepted**.)
+  - WP01 T001 unique-temp: pinned to FR-006's stronger corrupt-vs-succeed
+    same-fixture pair, not a filename-uniqueness proxy. (**accepted**.)
+  - WP02 `requirement_refs`: dropped the SC-001 fig-leaf, kept FR-005 (the ADR
+    records the contract decision). (**accepted**.)
+  - Verified not defects: the `p0_repro`→`regression` marker transition runs the
+    tests per-PR after the fix; WP02 DoD anchors all exist/checkable; the
+    CAS-folded-into-`StaleAdvancePlan` and lock-span-excludes-dispatch invariants
+    are objectively checkable in Review Guidance. (**noted**.)
+
+## Net effect on the design
+
 **Net effect on the design:** the lock is NOT redundant with the CAS — the CAS
 closes the bootstrap→commit *staleness* window (synchronous/overlapping reads),
 the lock closes the *true-concurrency TOCTOU* where two writers both pass the CAS
