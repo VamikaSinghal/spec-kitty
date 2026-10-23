@@ -43,7 +43,8 @@ from typer.testing import CliRunner
 
 from specify_cli.cli.commands.upgrade import upgrade
 from specify_cli.migration.schema_version import REQUIRED_SCHEMA_VERSION
-from specify_cli.upgrade.migrations.base import BaseMigration, MigrationResult
+from specify_cli.upgrade.migrations.base import BaseMigration, MigrationResult, MigrationStateUnreadableError
+from specify_cli.upgrade.outcome import UpgradeFailureReason, UpgradeOutcome
 from specify_cli.upgrade.registry import MigrationRegistry
 from specify_cli.upgrade.runner import MigrationRunner
 
@@ -263,6 +264,56 @@ def test_non_fatal_cannot_apply_note_does_not_populate_worktree_failures(tmp_pat
 
         assert result.worktree_failures == []
         assert any("Cannot apply" in w for w in result.warnings)
+    finally:
+        MigrationRegistry.clear()
+
+
+@pytest.mark.parametrize(
+    ("raising_step", "expected_message"),
+    [("detect", "Cannot safely detect"), ("apply", "Cannot apply")],
+)
+def test_worktree_migration_that_raises_is_a_fatal_worktree_failure(tmp_path: Path, raising_step: str, expected_message: str) -> None:
+    """#5746: a worktree migration whose detect()/apply() raises was recorded in ``errors``
+    only, so the run exited 0 on "Upgrade complete!" with an Errors: section above it."""
+    MigrationRegistry.clear()
+
+    def _raise_in_worktree(step: str, project_path: Path) -> None:
+        # Only inside the worktree: the main checkout's own run must succeed.
+        if step == raising_step and ".worktrees" in project_path.parts:
+            raise MigrationStateUnreadableError("boom")
+
+    class _RaisingMigration(BaseMigration):
+        migration_id = f"test_5746_raises_in_{raising_step}"
+        description = "#5746 worktree migration that raises"
+        target_version = _TARGET_VERSION
+        runs_on_worktrees = True
+
+        def detect(self, project_path: Path) -> bool:
+            _raise_in_worktree("detect", project_path)
+            return True
+
+        def can_apply(self, project_path: Path) -> tuple[bool, str]:  # noqa: ARG002
+            return True, ""
+
+        def apply(self, project_path: Path, dry_run: bool = False) -> MigrationResult:  # noqa: ARG002
+            _raise_in_worktree("apply", project_path)
+            return MigrationResult(success=True, changes_made=["stub applied"])
+
+    root = tmp_path / "repo"
+    _init_repo(root)
+    _add_worktree(root, "lane-e", f"{NON_INTEGRATING_PREFIX}lane-e")
+
+    try:
+        MigrationRegistry.register(_RaisingMigration)
+
+        result = MigrationRunner(root).upgrade(_TARGET_VERSION, dry_run=False, include_worktrees=True)
+        outcome = UpgradeOutcome(result=result, worktree_failures=list(result.worktree_failures), had_migrations=True)
+
+        assert result.success, "the main checkout's own migration must succeed in this repro"
+        assert [f for f in result.worktree_failures if expected_message in f and "lane-e" in f], result.worktree_failures
+        assert outcome.reasons == (UpgradeFailureReason.WORKTREE_FAILURE,)
+        assert outcome.exit_code == 1
+        assert outcome.closing_line() == "Upgrade failed."
     finally:
         MigrationRegistry.clear()
 

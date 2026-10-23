@@ -310,12 +310,15 @@ def test_recording_a_second_report_replaces_the_first() -> None:
     assert outcome.kind is UpgradeOutcomeKind.NO_OP
 
 
-def test_a_success_that_carries_an_error_diagnostic_still_lists_it() -> None:
-    """``errors()`` reports what was collected; the kind and exit code are decided by reasons alone."""
+def test_a_result_that_carries_an_error_diagnostic_is_a_failure_that_lists_it() -> None:
+    """An error is never shown above a success closing line: an unexplained ``result.errors`` entry fails the run (#5746)."""
     outcome = UpgradeOutcome(result=UpgradeResult(success=True, from_version=_FROM, to_version=_TO, errors=["an error diagnostic"]))
 
     assert outcome.errors() == ["an error diagnostic"]
-    assert outcome.exit_code == 0
+    assert outcome.reasons == (UpgradeFailureReason.MIGRATION_FAILED,)
+    assert outcome.kind is UpgradeOutcomeKind.FAILED
+    assert outcome.status == "failed"
+    assert outcome.exit_code == 1
 
 
 def test_the_truth_table_exercises_every_failure_reason() -> None:

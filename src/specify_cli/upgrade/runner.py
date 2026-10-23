@@ -715,7 +715,10 @@ class MigrationRunner:
                     migration_needed = migration.detect(worktree)
                 except (GitignorePathError, MigrationStateUnreadableError) as exc:
                     worktree_errored = True
-                    result["errors"].append(f"Worktree {worktree.name}: Cannot safely detect {migration.migration_id}: {exc}")
+                    # Fatal like a failed apply(): a migration that was never evaluated is not a success (#5746).
+                    error_message = f"Worktree {worktree.name}: Cannot safely detect {migration.migration_id}: {exc}"
+                    result["errors"].append(error_message)
+                    result["worktree_failures"].append(error_message)
                     if not dry_run and self._record_migration_result(
                         wt_metadata,
                         worktree,
@@ -749,7 +752,9 @@ class MigrationRunner:
                     migration_result = migration.apply(worktree, dry_run=dry_run)
                 except (GitignorePathError, MigrationStateUnreadableError) as exc:
                     worktree_errored = True
-                    result["errors"].append(f"Worktree {worktree.name}: Cannot apply {migration.migration_id}: {exc}")
+                    error_message = f"Worktree {worktree.name}: Cannot apply {migration.migration_id}: {exc}"
+                    result["errors"].append(error_message)
+                    result["worktree_failures"].append(error_message)
                     continue
                 if migration_result.manual_review_required:
                     worktree_held.update(migration_result.preserved_paths)
@@ -778,7 +783,10 @@ class MigrationRunner:
                         # bump last_upgraded_at. The failure record itself is
                         # already persisted by _record_migration_result.
                     worktree_failed = True
-                    failure_messages = [f"Worktree {worktree.name}: {e}" for e in migration_result.errors]
+                    # A failure that gave no error of its own still needs one line, or no failure is recorded (#5746).
+                    failure_messages = [f"Worktree {worktree.name}: {e}" for e in migration_result.errors] or [
+                        f"Worktree {worktree.name}: Migration {migration.migration_id} failed"
+                    ]
                     result["errors"].extend(failure_messages)
                     result["worktree_failures"].extend(failure_messages)
 

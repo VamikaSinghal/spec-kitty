@@ -579,12 +579,12 @@ def _render_tail(outcome: UpgradeOutcome, **overrides: Any) -> str:
     return capture.get()
 
 
-def test_no_op_tail_still_shows_an_error_diagnostic_carried_by_a_successful_result() -> None:
+def test_an_error_diagnostic_on_an_otherwise_no_op_result_ends_on_the_failed_closing_line() -> None:
     result = UpgradeResult(success=True, from_version=_PROJECT_VERSION, to_version=_PROJECT_VERSION, errors=["an error diagnostic"])
 
     output = _render_tail(UpgradeOutcome(result=result))
 
-    assert output == f"{_CLOSING_NO_OP}\nError: an error diagnostic\n"
+    assert output == f"Errors:\n  ✗ an error diagnostic\n\n{_CLOSING_FAILED}\n"
 
 
 def test_non_success_tail_prints_sections_then_the_closing_line_last() -> None:

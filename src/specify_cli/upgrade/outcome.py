@@ -196,8 +196,7 @@ class UpgradeOutcome:
     @property
     def reasons(self) -> tuple[UpgradeFailureReason, ...]:
         """Every reason this run is not a success, in declaration order."""
-        held = (
-            (UpgradeFailureReason.MIGRATION_FAILED, not self.result.success),
+        others = (
             (UpgradeFailureReason.ACTIVATION_ERROR, bool(self.activation_errors)),
             (UpgradeFailureReason.WORKTREE_FAILURE, bool(self.worktree_failures)),
             (UpgradeFailureReason.COMMIT_RECOVERY_FAILED, self.commit_recovery_failed),
@@ -206,7 +205,21 @@ class UpgradeOutcome:
             (UpgradeFailureReason.PREVIEW_INCOMPLETE, self.preview_incomplete),
             (UpgradeFailureReason.SURFACE_DRIFT, bool(self.drifted_paths)),
         )
-        return tuple(reason for reason, holds in held if holds)
+        other_reasons = tuple(reason for reason, holds in others if holds)
+        migration_failed = not self.result.success or self._has_unexplained_result_error(other_reasons)
+        return (UpgradeFailureReason.MIGRATION_FAILED, *other_reasons) if migration_failed else other_reasons
+
+    def _has_unexplained_result_error(self, other_reasons: tuple[UpgradeFailureReason, ...]) -> bool:
+        """True when ``result.errors`` is non-empty and no other reason explains it (#5746).
+
+        An error shown above a success closing line is the defect this closes, so such a
+        message makes the run a failure. When another reason holds, the run already fails
+        and that reason owns the message: ``result.errors`` also carries worktree failures,
+        a commit-recovery failure and surface-repair error diagnostics, none of which can
+        be told apart by their text. Counting them here would mislabel them as a failed
+        migration and, for a worktree failure, fail the main checkout's commit too.
+        """
+        return bool(self.result.errors) and not other_reasons
 
     @property
     def kind(self) -> UpgradeOutcomeKind:
