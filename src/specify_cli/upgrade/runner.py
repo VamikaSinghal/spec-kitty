@@ -9,7 +9,7 @@ import sys
 from dataclasses import dataclass, field
 from kernel.clock import datetime, now_utc
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from packaging.version import InvalidVersion, Version
 from rich.console import Console
@@ -887,7 +887,7 @@ class MigrationRunner:
         main_stamp = main_metadata.last_upgraded_at
         if main_stamp is None:
             return fallback_timestamp
-        return main_stamp
+        return cast(datetime, main_stamp)
 
     def _create_initial_metadata(self, detected_version: str) -> ProjectMetadata:
         """Create initial metadata for a project without it.
