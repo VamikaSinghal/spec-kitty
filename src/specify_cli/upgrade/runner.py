@@ -887,6 +887,9 @@ class MigrationRunner:
         main_stamp = main_metadata.last_upgraded_at
         if main_stamp is None:
             return fallback_timestamp
+        # ``last_upgraded_at`` is declared ``datetime | None``, but mypy --strict sees the
+        # metadata loaded through an untyped path as ``Any`` here; the None check above
+        # makes this the datetime branch.
         return cast(datetime, main_stamp)
 
     def _create_initial_metadata(self, detected_version: str) -> ProjectMetadata:
