@@ -270,11 +270,17 @@ def test_non_fatal_cannot_apply_note_does_not_populate_worktree_failures(tmp_pat
 
 @pytest.mark.parametrize(
     ("raising_step", "expected_message"),
-    [("detect", "Cannot safely detect"), ("apply", "Cannot apply")],
+    [
+        ("detect", "Cannot safely detect"),
+        ("apply", "Cannot apply"),
+        # A failed apply() that gave no error of its own still records one line (#5746).
+        ("apply-silent", "Migration test_5746_raises_in_apply-silent failed"),
+    ],
 )
 def test_worktree_migration_that_raises_is_a_fatal_worktree_failure(tmp_path: Path, raising_step: str, expected_message: str) -> None:
-    """#5746: a worktree migration whose detect()/apply() raises was recorded in ``errors``
-    only, so the run exited 0 on "Upgrade complete!" with an Errors: section above it."""
+    """#5746: a worktree migration whose detect()/apply() raises, or whose apply() fails
+    without an error message, was not a worktree failure, so the run exited 0 on
+    "Upgrade complete!"."""
     MigrationRegistry.clear()
 
     def _raise_in_worktree(step: str, project_path: Path) -> None:
@@ -297,6 +303,8 @@ def test_worktree_migration_that_raises_is_a_fatal_worktree_failure(tmp_path: Pa
 
         def apply(self, project_path: Path, dry_run: bool = False) -> MigrationResult:  # noqa: ARG002
             _raise_in_worktree("apply", project_path)
+            if raising_step == "apply-silent" and ".worktrees" in project_path.parts:
+                return MigrationResult(success=False)
             return MigrationResult(success=True, changes_made=["stub applied"])
 
     root = tmp_path / "repo"
