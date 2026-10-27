@@ -885,6 +885,98 @@ def test_validate_research_artifacts_benign_only_passes_with_note(tmp_path: Path
     assert "not owned by WP01" in console.print.call_args.args[0]
 
 
+def test_validate_research_artifacts_benign_only_json_output_prints_no_note(tmp_path: Path) -> None:
+    """#6651: under ``--json`` the benign-only note must not be printed at all.
+    ``console`` is stdout, so the note would land ahead of the JSON document
+    and break ``json.loads(stdout)``; the gate still passes."""
+    console = MagicMock()
+    porcelain = " M kitty-specs/demo/status.json\n M kitty-specs/demo/status.events.jsonl\n"
+    with (
+        patch("subprocess.run", return_value=_make_status_subproc(0, porcelain)),
+        patch(
+            "specify_cli.review.dirty_classifier.classify_dirty_paths",
+            return_value=([], ["kitty-specs/demo/status.json", "kitty-specs/demo/status.events.jsonl"]),
+        ),
+    ):
+        result = _validate_research_artifacts(
+            main_repo_root=tmp_path,
+            feature_dir=tmp_path / "kitty-specs" / "demo",
+            mission_slug="demo",
+            wp_id="WP01",
+            mission_type="software-dev",
+            target_lane="for_review",
+            console=console,
+            json_output=True,
+        )
+    assert result is None
+    console.print.assert_not_called()
+
+
+def test_validate_research_artifacts_json_output_keeps_blocking_guidance(tmp_path: Path) -> None:
+    """#6651 control: ``json_output`` only silences the note. A blocking dirty
+    file still refuses the move with the same guidance, in both modes."""
+    porcelain = " M kitty-specs/demo/scratch/some-file.txt\n M kitty-specs/demo/status.json\n"
+    outcomes = []
+    for json_output in (False, True):
+        console = MagicMock()
+        with (
+            patch("subprocess.run", return_value=_make_status_subproc(0, porcelain)),
+            patch(
+                "specify_cli.review.dirty_classifier.classify_dirty_paths",
+                return_value=(["kitty-specs/demo/scratch/some-file.txt"], ["kitty-specs/demo/status.json"]),
+            ),
+        ):
+            guidance = _validate_research_artifacts(
+                main_repo_root=tmp_path,
+                feature_dir=tmp_path / "kitty-specs" / "demo",
+                mission_slug="demo",
+                wp_id="WP01",
+                mission_type="software-dev",
+                target_lane="for_review",
+                console=console,
+                json_output=json_output,
+            )
+        assert guidance is not None
+        assert "Blocking: 1 uncommitted file(s):" in guidance
+        assert console.print.call_count == (0 if json_output else 1)
+        outcomes.append(guidance)
+    assert outcomes[0] == outcomes[1]
+
+
+def test_validate_ready_for_review_forwards_json_output_to_research_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """#6651: the orchestrator hands its ``json_output`` to the research-artifact
+    gate, the only validator that prints; the default stays ``False``."""
+    import specify_cli.cli.commands.agent.tasks_parsing_validation as tpv
+
+    (tmp_path / "kitty-specs" / "demo").mkdir(parents=True)
+    seen: list[bool] = []
+
+    def _capture(**kwargs: object) -> None:
+        seen.append(bool(kwargs["json_output"]))
+        return None
+
+    monkeypatch.setattr(tpv, "_validate_research_artifacts", _capture)
+    for json_output in (True, False):
+        valid, guidance = tpv._validate_ready_for_review(
+            tmp_path,
+            "demo",
+            "WP01",
+            False,
+            get_main_repo_root=lambda root: root,
+            get_mission_type=lambda _feature_dir: "documentation",
+            get_feature_target_branch=MagicMock(),
+            resolve_workspace_for_wp=MagicMock(),
+            review_currency_check_branch=MagicMock(),
+            behind_commits_touch_only_planning_artifacts=MagicMock(),
+            filter_runtime_state_paths=MagicMock(),
+            list_wp_branch_specs_changes_for_guard=MagicMock(),
+            console=MagicMock(),
+            **({"json_output": True} if json_output else {}),
+        )
+        assert (valid, guidance) == (True, [])
+    assert seen == [True, False]
+
+
 def test_validate_research_artifacts_unattributable_path_not_owned_by_moving_wp(tmp_path: Path) -> None:
     """FR-005: a blocking path that is not the moving WP's own residue must be
     stated as unattributable, never claimed as ``owned by {wp_id}`` regardless

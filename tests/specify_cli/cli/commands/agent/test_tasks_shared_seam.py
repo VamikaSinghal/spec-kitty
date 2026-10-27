@@ -142,6 +142,25 @@ def test_patched_get_main_repo_root_intercepts_check_unchecked_subtasks(tmp_path
     root_mock.assert_called_once_with(tmp_path)
 
 
+@pytest.mark.parametrize("json_output", [True, False])
+def test_validate_ready_for_review_wrapper_forwards_json_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, json_output: bool) -> None:
+    """#6651: the ``tasks_shared`` wrapper passes the caller's ``--json`` flag
+    through to the seam unchanged (default ``False``), alongside the injected
+    ``tasks``-resident collaborators."""
+    captured: dict[str, object] = {}
+
+    def _seam(*_args: object, **kwargs: object) -> tuple[bool, list[str]]:
+        captured.update(kwargs)
+        return True, []
+
+    monkeypatch.setattr(tasks_shared, "_seam_validate_ready_for_review", _seam)
+    extra = {"json_output": True} if json_output else {}
+
+    assert tasks._validate_ready_for_review(tmp_path, "demo", "WP01", False, **extra) == (True, [])
+    assert captured["json_output"] is json_output
+    assert captured["console"] is tasks.console
+
+
 def test_patched_get_main_repo_root_intercepts_validate_ready_for_review(
     tmp_path: Path,
 ) -> None:

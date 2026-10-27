@@ -1375,6 +1375,44 @@ def test_successful_auto_commit_occurs_only_after_gate(
 
 
 @pytest.mark.parametrize("json_mode", [False, True])
+@pytest.mark.parametrize("auto_commit_flag", ["--auto-commit", "--no-auto-commit"])
+def test_readiness_validator_receives_the_json_flag(
+    tmp_path: Path,
+    json_mode: bool,
+    auto_commit_flag: str,
+) -> None:
+    """#6651: ``move-task`` hands its ``--json`` flag to ``_validate_ready_for_review``
+    on both readiness paths (deferred after the auto-commit, and up front with
+    ``--no-auto-commit``), so the validator can keep its human note off stdout."""
+    ports, _router = _build_command_fixture(tmp_path)
+    seen: list[object] = []
+
+    def _validate(*args: object, **kwargs: object) -> tuple[bool, list[str]]:
+        seen.append(kwargs.get("json_output"))
+        return True, []
+
+    with (
+        setup_mocked_env(
+            tmp_path,
+            mission_slug=_MISSION,
+            target_branch="lane-a",
+            extra_patches={"_check_unchecked_subtasks": []},
+        ),
+        patch.object(tasks_move_task, "_default_move_task_ports", return_value=ports),
+        patch.object(tasks_move_task, "_mt_run_pre_review_gate", side_effect=lambda st: None),
+        patch.object(tasks_move_task, "_mt_commit_lane_deliverables", side_effect=lambda st: None),
+        patch("specify_cli.cli.commands.agent.tasks._validate_ready_for_review", side_effect=_validate),
+    ):
+        result = CliRunner().invoke(
+            app,
+            ["move-task", "WP01", "--to", "for_review", "--mission", _MISSION, auto_commit_flag, *(["--json"] if json_mode else [])],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert seen == [json_mode]
+
+
+@pytest.mark.parametrize("json_mode", [False, True])
 def test_gate_created_path_is_reverted_on_terminal_block(
     tmp_path: Path,
     json_mode: bool,
