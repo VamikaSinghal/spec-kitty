@@ -19,7 +19,8 @@ nor reads back a moved name", the re-export identity and "every moved name is
 *defined* in its owning seam, not merely re-imported there". This file pins the
 rest of ``contracts/module-layout.md``:
 
-* the bridge's ``__all__`` is unchanged;
+* the bridge's ``__all__`` matches its explicit public API, including the
+  read-only acceptance facts entry point;
 * the import direction: no ``runtime_bridge_*`` module imports the bridge at
   all, the lower seams import nothing above them, and the leaf seams
   (identity, cores, retrospective) import no ``runtime_bridge_*`` sibling. The
@@ -66,6 +67,7 @@ _BRIDGE_ALL = {
     "decide_next_via_runtime",
     "get_or_start_run",
     "query_current_state",
+    "read_runtime_acceptance_facts",
 }
 
 #: Module -> sibling modules it must never import, on top of the bridge itself,
@@ -129,7 +131,7 @@ def forbidden_import_violations(module: str, source: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def test_bridge_all_is_unchanged() -> None:
+def test_bridge_all_matches_public_contract() -> None:
     assert set(_module(_BRIDGE).__all__) == _BRIDGE_ALL
 
 
