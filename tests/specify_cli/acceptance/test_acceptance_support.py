@@ -230,15 +230,25 @@ def test_accept_command_reports_approved_wps_without_closing(feature_repo: Path,
     _write_acceptance_meta(feature_repo, mission_slug)
     _seed_convention_dirs(feature_repo, mission_slug)
     write_wp(feature_repo, mission_slug, "planned", "WP02")
+    write_wp(feature_repo, mission_slug, "planned", "WP03")
     # #4891: accept fails closed when lanes.json is absent.
     feature_dir = feature_repo / "kitty-specs" / mission_slug
     write_single_lane_manifest(feature_dir)
     write_acceptance_matrix(feature_dir, _passing_acceptance_matrix(mission_slug))
     run(["git", "add", "."], cwd=feature_repo)
-    run(["git", "commit", "-m", "Add second WP and meta"], cwd=feature_repo)
+    run(["git", "commit", "-m", "Add more WPs and meta"], cwd=feature_repo)
+
+    # WP-path gathering (_gather_work_packages): planned WPs are bucketed in
+    # task-file order and drive the non-terminal-lane fix-order entry.
+    pending = acc.collect_feature_summary(feature_repo, mission_slug, strict_metadata=True, mutate_matrix=False)
+    assert [wp.work_package_id for wp in pending.work_packages] == ["WP01", "WP02", "WP03"]
+    assert pending.lanes["planned"] == ["WP01", "WP02", "WP03"]
+    assert pending.canceled_wps == []
+    assert "Move all work packages to approved or done." in pending.recommended_fix_order
 
     _approve_wp(feature_repo, mission_slug, "WP01")
     _approve_wp(feature_repo, mission_slug, "WP02")
+    _force_lane(feature_repo, mission_slug, "WP03", "canceled")
     run(["git", "add", "."], cwd=feature_repo)
     run(["git", "commit", "-m", "Approve WPs"], cwd=feature_repo)
     # Accept commits the acceptance meta through the protected-primary router
@@ -277,6 +287,11 @@ def test_accept_command_reports_approved_wps_without_closing(feature_repo: Path,
     summary = acc.collect_feature_summary(feature_repo, mission_slug, strict_metadata=True)
     assert summary.lanes["approved"] == ["WP01", "WP02"]
     assert summary.lanes["done"] == []
+    assert summary.lanes["canceled"] == ["WP03"]
+    assert [wp.work_package_id for wp in summary.work_packages] == ["WP01", "WP02", "WP03"]
+    assert [(entry["wp_id"], entry["actor"], entry["reason"]) for entry in summary.canceled_wps] == [("WP03", "test-agent", "test fixture seed")]
+    # The provenance-free fix-order view still lists a canceled WP as a fix candidate.
+    assert summary.recommended_fix_order == ["Move all work packages to approved or done."]
 
 
 def test_accept_diagnose_json_reports_missing_events_bootstrap_issue(feature_repo: Path, mission_slug: str, monkeypatch: pytest.MonkeyPatch) -> None:

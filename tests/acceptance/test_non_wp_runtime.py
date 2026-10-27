@@ -52,10 +52,19 @@ def test_completed_plan_accepts_without_fabricated_wp_artifacts(tmp_path: Path, 
 
 
 def test_unfinished_review_cannot_accept_an_empty_wp_set(tmp_path: Path) -> None:
-    root, _, slug = _plan(tmp_path, complete=False)
+    root, mission_dir, slug = _plan(tmp_path, complete=False)
+    spec = mission_dir / "spec.md"
+    spec.write_text(
+        spec.read_text(encoding="utf-8") + "\n- **FR-002**: [NEEDS CLARIFICATION: which order?] <!-- decision_id: 01KNONWPDECISION0000000001 -->\n",
+        encoding="utf-8",
+    )
+    _commit(root)
     summary = collect_feature_summary(root, slug, mutate_matrix=False)
     assert not summary.ok
     assert any("runtime" in issue.lower() and "review" in issue for issue in summary.activity_issues)
+    # The non-WP path shares the WP path's summary tail: the open marker is fix-ordered.
+    assert summary.needs_clarification == [str(mission_dir / "spec.md")]
+    assert "Resolve open NEEDS CLARIFICATION markers." in summary.recommended_fix_order
 
 
 @pytest.mark.parametrize("name", ["spec.md", "research.md", "plan.md"])
