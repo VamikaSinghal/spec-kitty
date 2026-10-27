@@ -253,6 +253,9 @@ def _parse_lock(content: bytes | str) -> ReviewLock:
 
 _GIT_FATAL_EXIT = 128
 _NOT_A_REPOSITORY = "not a git repository"
+# Newer git reports a ``.git`` gitfile whose target is gone with this text
+# instead of ``not a git repository``; both mean no repository holds the lock.
+_GITFILE_TARGET_MISSING = "gitfile does not point to a valid repository"
 
 
 def _git_stdout(repo: Path, *args: str) -> str | None:
@@ -270,8 +273,9 @@ def _git_unreadable(path: str, exc: GitCommandError) -> ReviewLockReadError:
 
 
 def _outside_any_repository(exc: GitCommandError) -> bool:
-    """Whether git failed because the directory is not inside a repository (exit 128, ``not a git repository``)."""
-    return exc.returncode == _GIT_FATAL_EXIT and _NOT_A_REPOSITORY in exc.stderr.lower()
+    """Whether git failed because the directory is not inside a repository (exit 128, either wording git uses)."""
+    stderr = exc.stderr.lower()
+    return exc.returncode == _GIT_FATAL_EXIT and (_NOT_A_REPOSITORY in stderr or _GITFILE_TARGET_MISSING in stderr)
 
 
 def _committed_lock(repo_root: Path, ref: str) -> tuple[bool, ReviewLockReadError | None]:

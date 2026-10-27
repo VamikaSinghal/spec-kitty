@@ -29,6 +29,7 @@ from specify_cli.review.lock import (
 pytestmark = pytest.mark.fast
 
 _NOT_A_REPO = "<not-a-repository>"
+_BROKEN_GITFILE = "<broken-gitfile>"
 
 _VALID = {"worktree_path": "/w", "wp_id": "WP01", "agent": "claude", "started_at": "2026-10-21T00:00:00+00:00", "pid": 1}
 
@@ -242,16 +243,21 @@ def test_tracked_lock_deleted_by_a_release_is_still_refused(repo: Path) -> None:
         pytest.param(None, False, None, id="missing-without-a-ref"),
         pytest.param(None, False, "nope", id="missing-with-unknown-ref"),
         pytest.param(json.dumps(_VALID), True, _NOT_A_REPO, id="existing-outside-any-repository"),
+        # Newer git words this "gitfile does not point to a valid repository", not "not a git repository".
+        pytest.param(json.dumps(_VALID), True, _BROKEN_GITFILE, id="existing-gitfile-to-a-missing-repository"),
     ],
 )
 def test_no_refusal_without_a_tracked_or_unreadable_lock(repo: Path, tmp_path: Path, lock_content: str | None, exists: bool, ref: str | None) -> None:
     """An ordinary lock (untracked) or none passes, and an unresolvable ref is for worktree creation to report."""
     if lock_content is not None:
         _write_lock(repo, lock_content)
-    if ref == _NOT_A_REPO:
+    if ref in (_NOT_A_REPO, _BROKEN_GITFILE):
         # A workspace outside any repository cannot hold a tracked lock; the readable lock passes.
-        worktree, ref = tmp_path / "plain", None
+        worktree = tmp_path / "plain"
         worktree.mkdir()
+        if ref == _BROKEN_GITFILE:
+            (worktree / ".git").write_text("gitdir: ../missing\n", encoding="utf-8")
+        ref = None
         _write_lock(worktree, lock_content or "")
     else:
         worktree = repo if exists else tmp_path / "lane"
