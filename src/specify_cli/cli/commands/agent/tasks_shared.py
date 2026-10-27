@@ -578,6 +578,7 @@ def _validate_ready_for_review(
     workspace_override: object | None = None,
     review_base_ref: str | None = None,
     check_kitty_specs: bool = True,
+    json_output: bool = False,
 ) -> tuple[bool, list[str]]:
     """Validate that WP is ready for review by checking for uncommitted changes.
 
@@ -603,6 +604,7 @@ def _validate_ready_for_review(
         workspace_override=workspace_override,
         review_base_ref=review_base_ref,
         check_kitty_specs=check_kitty_specs,
+        json_output=json_output,
         get_main_repo_root=_tasks.get_main_repo_root,
         get_mission_type=_tasks.get_mission_type,
         get_feature_target_branch=_tasks.get_feature_target_branch,

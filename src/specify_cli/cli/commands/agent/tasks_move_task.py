@@ -1147,6 +1147,7 @@ def _mt_gather_review_facts(st: _MoveTaskState) -> None:
                 st.task_id,
                 st.force,
                 target_lane=str(st.target_lane),
+                json_output=st.json_output,
                 **validation_options,
             )
             review_ready = is_valid
@@ -1209,6 +1210,7 @@ def _mt_complete_deferred_for_review_readiness(st: _MoveTaskState) -> None:
         workspace_override=workspace_override,
         review_base_ref=review_base_ref,
         check_kitty_specs=check_kitty_specs,
+        json_output=st.json_output,
     )
     st.request = replace(
         st.request,

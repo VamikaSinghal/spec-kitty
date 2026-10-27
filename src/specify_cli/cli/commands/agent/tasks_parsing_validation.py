@@ -316,12 +316,18 @@ def _validate_research_artifacts(
     mission_type: str,
     target_lane: str,
     console: _ConsoleLike,
+    json_output: bool = False,
 ) -> list[str] | None:
     """Check 1: uncommitted planning artifacts in the planning repo (all missions).
 
     Returns ``None`` when this gate passes (no blocking dirty files), otherwise
     a populated ``guidance`` list that the caller returns as the failure result.
     Mutates nothing outside its local ``guidance`` accumulator.
+
+    ``json_output`` is the caller's ``--json`` flag: the benign-dirty-files
+    note is a human aside, so it is skipped under ``--json`` (#6651). It is
+    the only line this gate prints, and ``console`` is stdout, where under
+    ``--json`` it would land ahead of the JSON document.
     """
     # Guard (FR-013): a failed probe must not read as "nothing dirty", so a
     # GitCommandError propagates and the move is refused, never waved through.
@@ -364,8 +370,9 @@ def _validate_research_artifacts(
     blocking_set = set(blocking)
     blocking_entries = [(line, paths) for line, paths in entries if blocking_set & set(paths)]
 
-    if len(entries) > len(blocking_entries):
-        # Log info only — benign dirty files/entries do not block review handoff
+    if len(entries) > len(blocking_entries) and not json_output:
+        # Log info only — benign dirty files/entries do not block review handoff.
+        # Human mode only: under --json stdout carries the JSON document alone (#6651).
         benign_entry_count = len(entries) - len(blocking_entries)
         console.print(f"[dim]Note: {benign_entry_count} unrelated dirty file(s) ignored (not owned by {wp_id})[/dim]")
 
@@ -961,6 +968,7 @@ def _validate_ready_for_review(
     filter_runtime_state_paths: Callable[[Sequence[StatusEntry]], Sequence[StatusEntry]],
     list_wp_branch_specs_changes_for_guard: Callable[..., list[str]],
     console: _ConsoleLike,
+    json_output: bool = False,
 ) -> tuple[bool, list[str]]:
     """Validate that WP is ready for review by checking for uncommitted changes.
 
@@ -981,6 +989,9 @@ def _validate_ready_for_review(
             the retry hints emitted in guidance messages (FR-015) so reviewers
             transitioning to ``approved``/``planned`` see the correct retry
             command instead of a hard-coded ``for_review`` string.
+        json_output: The caller's ``--json`` flag. Suppresses the human-only
+            benign-dirty-files note so stdout stays a single JSON document
+            (#6651); the verdict itself is unchanged.
 
     Returns:
         Tuple of (is_valid, guidance_messages)
@@ -1018,6 +1029,7 @@ def _validate_ready_for_review(
         mission_type=mission_type,
         target_lane=target_lane,
         console=console,
+        json_output=json_output,
     )
     if research_guidance is not None:
         return False, research_guidance
