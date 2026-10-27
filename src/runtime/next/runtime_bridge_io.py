@@ -25,10 +25,10 @@ dependency on it.
 This module owns the names it defines. Callers inside ``src/runtime/next/``
 look a seam-owned name up on this module (``runtime_bridge`` does so through
 its ``_io_seam`` alias); a seam calls its own functions directly. The bridge
-keeps no forwarder for any of them. Two names are public and reached from
+keeps no forwarder for any of them. Three names are public and reached from
 outside the package, so the bridge re-exports them as the very same objects
 (``from runtime.next.runtime_bridge_io import get_or_start_run,
-build_operational_context_for_claim``): CLI modules look them up on the
+build_operational_context_for_claim, read_runtime_acceptance_facts``): CLI modules look them up on the
 bridge. A test replaces a seam-owned function by patching THIS module; a patch
 on the bridge's re-export intercepts only the callers that look the name up
 on the bridge.
@@ -925,6 +925,49 @@ def _resolve_run_dir_for_mission(repo_root: Path, mission_slug: str) -> Path | N
     return run_index.resolve_run_dir(run_dir_raw, repo_root)
 
 
+@dataclass(frozen=True)
+class RuntimeAcceptanceFacts:
+    """Read-only facts from a mission's existing run and frozen workflow."""
+
+    mission_family: str
+    wp_driven: bool
+    step_ids: tuple[str, ...]
+    completed_step_ids: tuple[str, ...]
+    issued_step_id: str | None
+    blocked_reason: str | None
+    pending_decision_ids: tuple[str, ...]
+
+
+def read_runtime_acceptance_facts(repo_root: Path, mission_slug: str) -> RuntimeAcceptanceFacts | None:
+    """Never start, advance or repair a run while gathering acceptance facts."""
+    from kernel.content_digest import sha256_digest
+    from runtime.next import runtime_bridge_engine as engine
+
+    run_dir = _resolve_run_dir_for_mission(repo_root, mission_slug)
+    if run_dir is None:
+        return None
+    snapshot = engine._read_snapshot(run_dir)
+    bound_slug = snapshot.mission_slug or snapshot.inputs.get("mission_slug")
+    if bound_slug != mission_slug or snapshot.run_id != run_dir.name:
+        raise MissionRuntimeError("Runtime snapshot does not belong to the requested mission/run")
+    frozen_bytes = (run_dir / "mission_template_frozen.yaml").read_bytes()
+    if sha256_digest(frozen_bytes).removeprefix("sha256:") != snapshot.template_hash:
+        raise MissionRuntimeError("Frozen runtime template does not match its recorded hash")
+    template = engine._load_frozen_template(run_dir)
+    if template.mission.key != snapshot.mission_key:
+        raise MissionRuntimeError("Frozen runtime type does not match its recorded run")
+    step_ids = tuple(step.id for step in template.steps)
+    return RuntimeAcceptanceFacts(
+        mission_family=snapshot.mission_key,
+        wp_driven=step_ids_declare_wp_iteration(step_ids),
+        step_ids=step_ids,
+        completed_step_ids=tuple(snapshot.completed_steps),
+        issued_step_id=snapshot.issued_step_id,
+        blocked_reason=snapshot.blocked_reason,
+        pending_decision_ids=tuple(snapshot.pending_decisions),
+    )
+
+
 def _resolve_tech_stack_for_profile(repo_root: Path, profile_id: str | None) -> frozenset[str]:
     """Best-effort resolution of the in-scope tech stack for ``profile_id``.
 
@@ -1395,11 +1438,8 @@ def guard_failure_artifact_paths(
     # *guard_failures*. The presence vocabulary is resolved per family, so if the
     # path-resolution family ever diverges from the guard-evaluation family, a
     # genuinely missing artifact whose tag is absent from this family's vocab
-    # would silently drop its ``looked for`` line. Live today all guards evaluate
-    # under software-dev (``_check_cli_guards``); the one structural mismatch is
-    # the not-yet-wired plan family (``_evaluate_plan_guards`` names ``spec.md``,
-    # which is not in ``_presence_filenames_for("plan")``) — keep the two families
-    # in step if plan-family guards are ever dispatched live.
+    # would silently drop its ``looked for`` line. Keep the per-family artifact
+    # manifest aligned with the runtime action vocabulary.
     known_tags = _presence_filenames_for(
         mission_family,
         repo_root=owned.owned_root if owned is not None and repo_root is not None else repo_root,

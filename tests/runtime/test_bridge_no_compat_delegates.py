@@ -44,6 +44,7 @@ _IO_MODULE = "runtime.next.runtime_bridge_io"
 #: ``from runtime.next.runtime_bridge_<seam> import <name>``).
 _KEPT_RE_EXPORT_OWNERS: dict[str, str] = {
     "get_or_start_run": "io",
+    "read_runtime_acceptance_facts": "io",
     "build_operational_context_for_claim": "io",
     "query_current_state": "query",
     "answer_decision_via_runtime": "query",

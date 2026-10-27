@@ -99,7 +99,7 @@ from runtime.next import runtime_bridge_io as _io_seam
 # the seam to intercept the runtime's own calls; patching these names here only
 # affects the CLI callers that import them from the bridge.
 from runtime.next.runtime_bridge_decision_log import DecisionGitLogUnavailable
-from runtime.next.runtime_bridge_io import build_operational_context_for_claim, get_or_start_run
+from runtime.next.runtime_bridge_io import build_operational_context_for_claim, get_or_start_run, read_runtime_acceptance_facts
 from runtime.next.runtime_bridge_query import (
     MissionNotFoundError,
     QueryModeValidationError,
@@ -1432,4 +1432,5 @@ __all__ = [
     "decide_next_via_runtime",
     "get_or_start_run",
     "query_current_state",
+    "read_runtime_acceptance_facts",
 ]

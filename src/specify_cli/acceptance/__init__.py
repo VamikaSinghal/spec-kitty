@@ -1443,6 +1443,24 @@ def collect_feature_summary(
     skipped_checks: list[AcceptanceCheckDiagnostic] = []
     blocked_checks: list[AcceptanceCheckDiagnostic] = []
 
+    # A non-WP workflow is vouched for by its real completed runtime and
+    # declared artifacts, never by fabricating tasks, lanes or WP state.
+    from .non_wp_runtime import collect_non_wp_runtime_summary
+
+    non_wp_summary = collect_non_wp_runtime_summary(
+        repo_root=repo_root,
+        feature_dir=feature_dir,
+        status_feature_dir=status_feature_dir,
+        branch=branch,
+        worktree_root=worktree_root,
+        primary_repo_root=primary_repo_root,
+        git_dirty=git_dirty,
+        strict_metadata=strict_metadata,
+        owned=owned,
+    )
+    if non_wp_summary is not None:
+        return non_wp_summary
+
     snapshot_wps = _collect_snapshot_wps(feature, status_feature_dir, activity_issues)
 
     # #2122: PRIMARY-partition reads (WP tasks/, planning artifacts) must key on
