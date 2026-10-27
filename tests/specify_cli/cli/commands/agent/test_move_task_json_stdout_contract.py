@@ -73,11 +73,17 @@ def _move_to_for_review(mission_dirname: str, *extra: str):
 
 
 @pytest.mark.regression
-def test_move_task_for_review_json_stdout_is_one_document_despite_benign_dirty_bookkeeping(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """RED on pre-fix code: stdout opened with the prose note, then the JSON."""
+@pytest.mark.parametrize("auto_commit_flag", ["--auto-commit", "--no-auto-commit"])
+def test_move_task_for_review_json_stdout_is_one_document_despite_benign_dirty_bookkeeping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, auto_commit_flag: str
+) -> None:
+    """RED on pre-fix code: stdout opened with the prose note, then the JSON.
+
+    Both readiness call sites are exercised: deferred after the auto-commit,
+    and up front under ``--no-auto-commit``."""
     _repo_root, mission_dirname = _claim_wp01_and_dirty_bookkeeping(tmp_path, monkeypatch, mission_slug="move-task-json-6651")
 
-    result = _move_to_for_review(mission_dirname, "--json")
+    result = _move_to_for_review(mission_dirname, auto_commit_flag, "--json")
 
     assert result.exit_code == 0, result.output
     assert _NOTE not in result.stdout, result.stdout

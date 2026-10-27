@@ -943,40 +943,6 @@ def test_validate_research_artifacts_json_output_keeps_blocking_guidance(tmp_pat
     assert outcomes[0] == outcomes[1]
 
 
-def test_validate_ready_for_review_forwards_json_output_to_research_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """#6651: the orchestrator hands its ``json_output`` to the research-artifact
-    gate, the only validator that prints; the default stays ``False``."""
-    import specify_cli.cli.commands.agent.tasks_parsing_validation as tpv
-
-    (tmp_path / "kitty-specs" / "demo").mkdir(parents=True)
-    seen: list[bool] = []
-
-    def _capture(**kwargs: object) -> None:
-        seen.append(bool(kwargs["json_output"]))
-        return None
-
-    monkeypatch.setattr(tpv, "_validate_research_artifacts", _capture)
-    for json_output in (True, False):
-        valid, guidance = tpv._validate_ready_for_review(
-            tmp_path,
-            "demo",
-            "WP01",
-            False,
-            get_main_repo_root=lambda root: root,
-            get_mission_type=lambda _feature_dir: "documentation",
-            get_feature_target_branch=MagicMock(),
-            resolve_workspace_for_wp=MagicMock(),
-            review_currency_check_branch=MagicMock(),
-            behind_commits_touch_only_planning_artifacts=MagicMock(),
-            filter_runtime_state_paths=MagicMock(),
-            list_wp_branch_specs_changes_for_guard=MagicMock(),
-            console=MagicMock(),
-            **({"json_output": True} if json_output else {}),
-        )
-        assert (valid, guidance) == (True, [])
-    assert seen == [True, False]
-
-
 def test_validate_research_artifacts_unattributable_path_not_owned_by_moving_wp(tmp_path: Path) -> None:
     """FR-005: a blocking path that is not the moving WP's own residue must be
     stated as unattributable, never claimed as ``owned by {wp_id}`` regardless
