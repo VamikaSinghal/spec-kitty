@@ -155,17 +155,13 @@ def test_mismatched_runtime_mission_binding_refuses_acceptance(tmp_path: Path) -
 
 
 def _non_wp_summary(root: Path, mission_dir: Path, *, status_dir: Path | None = None):
-    from specify_cli.acceptance.non_wp_runtime import collect_non_wp_runtime_summary
+    from specify_cli.acceptance.non_wp_runtime import collect_non_wp_runtime_facts
 
-    return collect_non_wp_runtime_summary(
+    return collect_non_wp_runtime_facts(
         repo_root=root,
         feature_dir=mission_dir,
         status_feature_dir=status_dir or mission_dir,
-        branch="main",
-        worktree_root=root,
-        primary_repo_root=root,
-        git_dirty=[],
-        strict_metadata=True,
+        wp_tasks_dir=mission_dir,
         owned=None,
     )
 

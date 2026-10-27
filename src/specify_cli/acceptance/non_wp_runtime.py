@@ -6,43 +6,61 @@ when the recorded runtime has no WP-iteration step and no WP task files.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from runtime.next.runtime_bridge import read_runtime_acceptance_facts
 from runtime.next.runtime_bridge_cores import MISSING_ARTIFACT_MESSAGE, evaluate_guards_strict
 from runtime.next.runtime_bridge_io import gather_artifact_presence
-from specify_cli.mission import MissionError, get_mission_for_feature
 from specify_cli.mission_metadata import resolve_mission_identity
 from specify_cli.runtime.resolver import required_artifacts_for
-from specify_cli.task_utils import LANES
-
-from .gates_core import PLANNING_ARTIFACT_ONLY_SKIP_REASON
-from .summary_core import _build_recommended_fix_order, build_warnings, evaluate_path_conventions
 
 if TYPE_CHECKING:
     from mission_runtime import OwnedCheckout
-    from . import AcceptanceSummary
+
+#: The one mission type whose acceptance is vouched for by its completed
+#: runtime and declared artifacts instead of work packages.
+_ARTIFACT_ONLY_MISSION_TYPE = "plan"
 
 
-def collect_non_wp_runtime_summary(
+def is_artifact_only_acceptance(mission_type: str | None) -> bool:
+    """Return whether ``mission_type`` may be accepted without work packages.
+
+    Deliberately limited to the built-in ``plan`` family; every other type keeps
+    the WP path with its runtime-independent gates. Generalising this to other
+    artifact-producing mission types is tracked in #4983.
+    """
+    return mission_type == _ARTIFACT_ONLY_MISSION_TYPE
+
+
+@dataclass(frozen=True)
+class NonWpRuntimeFacts:
+    """The part of an acceptance summary that a non-WP runtime supplies.
+
+    ``collect_feature_summary`` composes these with the checks it shares with
+    the WP path (clarification, clean tree, path conventions, fix order).
+    """
+
+    activity_issues: list[str]
+    #: Artifact names (relative to the planning dir) the runtime declares blocking.
+    required_artifacts: list[str]
+    missing_artifacts: list[str]
+
+
+def collect_non_wp_runtime_facts(
     *,
     repo_root: Path,
     feature_dir: Path,
     status_feature_dir: Path,
-    branch: str | None,
-    worktree_root: Path,
-    primary_repo_root: Path,
-    git_dirty: list[str],
-    strict_metadata: bool,
+    wp_tasks_dir: Path,
     owned: OwnedCheckout | None,
-) -> AcceptanceSummary | None:
-    from . import AcceptanceError, AcceptanceSummary, _check_needs_clarification, _optional_artifact_tokens, _planning_read_dir, _wp_tasks_read_dir
+) -> NonWpRuntimeFacts | None:
+    """Return runtime facts for an artifact-only mission, or ``None`` for the WP path."""
+    from . import AcceptanceError
 
     identity = resolve_mission_identity(feature_dir)
-    # This bounded repair admits only the built-in plan family. Preserve the
-    # exact existing WP/custom path, including its runtime-independent gates.
-    if identity.mission_type != "plan":
+    if not is_artifact_only_acceptance(identity.mission_type):
         return None
     runtime_root = owned.owned_root if owned is not None else repo_root
     try:
@@ -51,7 +69,7 @@ def collect_non_wp_runtime_summary(
         raise AcceptanceError("Cannot read canonical mission runtime for acceptance; no state was changed") from exc
     if facts is None or facts.wp_driven:
         return None
-    wp_homes = {feature_dir, status_feature_dir, _wp_tasks_read_dir(repo_root, feature_dir.name, owned=owned)}
+    wp_homes = {feature_dir, status_feature_dir, wp_tasks_dir}
     if any(next((home / "tasks").glob("WP*.md"), None) is not None for home in wp_homes):
         return None
     if facts.mission_family != identity.mission_type:
@@ -63,7 +81,6 @@ def collect_non_wp_runtime_summary(
     incomplete = sorted(set(facts.step_ids) - set(facts.completed_step_ids))
     if not facts.step_ids or incomplete or facts.issued_step_id or facts.blocked_reason or facts.pending_decision_ids:
         activity.append("Non-WP runtime is not complete; remaining steps: " + (", ".join(incomplete) or "pending runtime decision/result"))
-    planning_dir = _planning_read_dir(repo_root, feature_dir.name, owned=owned)
     required: set[str] = set()
     missing: set[str] = set()
     missing_prefix = MISSING_ARTIFACT_MESSAGE.format(name="")
@@ -77,43 +94,4 @@ def collect_non_wp_runtime_summary(
                 activity.append(f"{step_id}: {failure}")
     if not required:
         activity.append("Non-WP runtime has no declared blocking artifacts; acceptance refused")
-    try:
-        mission = get_mission_for_feature(feature_dir)
-    except MissionError:
-        mission = None
-    optional_missing = [token for token in _optional_artifact_tokens(mission) if not (planning_dir / token).exists()]
-    path_violations, path_warning, dedup = evaluate_path_conventions(mission, repo_root, feature_dir, planning_dir, strict_metadata=strict_metadata)
-    optional_missing = [token for token in optional_missing if token not in dedup]
-    warnings = build_warnings(missing_optional=optional_missing, path_violations=path_violations, path_convention_warning=path_warning)
-    return AcceptanceSummary(
-        feature=feature_dir.name,
-        repo_root=repo_root,
-        feature_dir=feature_dir,
-        tasks_dir=feature_dir / "tasks",
-        branch=branch,
-        worktree_root=worktree_root,
-        primary_repo_root=primary_repo_root,
-        lanes={lane: [] for lane in LANES},
-        work_packages=[],
-        metadata_issues=[],
-        activity_issues=activity,
-        unchecked_tasks=[],
-        needs_clarification=_check_needs_clarification([planning_dir / name for name in sorted(required)]),
-        missing_artifacts=sorted(missing),
-        optional_missing=optional_missing,
-        git_dirty=git_dirty,
-        path_violations=path_violations,
-        warnings=warnings,
-        acceptance_matrix_gate_skip_reason=PLANNING_ARTIFACT_ONLY_SKIP_REASON,
-        recommended_fix_order=_build_recommended_fix_order(
-            lanes={lane: [] for lane in LANES},
-            metadata_issues=[],
-            activity_issues=activity,
-            unchecked_tasks=[],
-            needs_clarification=[],
-            missing_artifacts=sorted(missing),
-            git_dirty=git_dirty,
-            path_violations=path_violations,
-            blocked_checks=[],
-        ),
-    )
+    return NonWpRuntimeFacts(activity_issues=activity, required_artifacts=sorted(required), missing_artifacts=sorted(missing))

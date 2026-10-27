@@ -47,6 +47,7 @@ from specify_cli.validators.paths import normalize_path_token
 from .gates_core import (
     PLANNING_ARTIFACT_ONLY_SKIP_REASON,
     AcceptanceCheckDiagnostic,
+    LaneGateOutcome,
     _check_lane_gates,
     _find_unchecked_tasks,
     _normalized_unchecked_tasks,
@@ -1397,6 +1398,71 @@ def _target_branch_for_feature(feature_dir: Path) -> str | None:
     return str(value) if value is not None else None
 
 
+@dataclass
+class _GatheredWorkPackages:
+    """The WP-specific facts ``collect_feature_summary`` gathers (empty for a non-WP mission)."""
+
+    lanes: dict[str, list[str]]
+    work_packages: list[WorkPackageState] = field(default_factory=list)
+    metadata_issues: list[str] = field(default_factory=list)
+    canceled_wps: list[dict[str, str]] = field(default_factory=list)
+    all_packages_acceptable: bool = False
+
+
+def _gather_work_packages(
+    repo_root: Path,
+    feature: str,
+    primary_slug: str,
+    status_feature_dir: Path,
+    activity_issues: list[str],
+    *,
+    strict_metadata: bool,
+    owned: OwnedCheckout | None,
+) -> _GatheredWorkPackages:
+    gathered = _GatheredWorkPackages(lanes={lane: [] for lane in LANES})
+    lanes = gathered.lanes
+    snapshot_wps = _collect_snapshot_wps(feature, status_feature_dir, activity_issues)
+    expected_wp_ids: list[str] = []
+    for wp in _iter_work_packages(repo_root, primary_slug, owned=owned):
+        wp_id = wp.work_package_id or wp.path.stem
+        expected_wp_ids.append(wp_id)
+
+        wp_snapshot = snapshot_wps.get(wp_id)
+        state, wp_metadata_issues = build_work_package_state(
+            wp,
+            wp_id,
+            wp_snapshot,
+            repo_root=repo_root,
+            strict_metadata=strict_metadata,
+        )
+        bucket_lane = state.lane
+        if bucket_lane in lanes:
+            lanes[bucket_lane].append(wp_id)
+        else:
+            lanes["planned"].append(wp_id)
+        gathered.metadata_issues.extend(wp_metadata_issues)
+        gathered.work_packages.append(state)
+
+        # FR-002/NFR-003: an operator-canceled WP is reported separately (the
+        # provenance/reason/actor/at read from the coord-surface snapshot that
+        # ``status_feature_dir`` already resolves), decided per-WP at the
+        # bucketing seam — the provenance-free lane bucket cannot carry it.
+        canceled_entry = build_canceled_wp_report(wp_id, wp_snapshot)
+        if canceled_entry is not None:
+            gathered.canceled_wps.append(canceled_entry)
+
+    _validate_wp_readiness(expected_wp_ids, snapshot_wps, status_feature_dir / EVENTS_FILENAME, activity_issues)
+
+    # Provenance-aware terminality for the FR-009 unchecked-task normalization
+    # (T007): the lane-only view cannot see whether a ``canceled`` WP is
+    # operator-authored, so decide it here from the per-WP data. Mirrors the
+    # ``_all_work_packages_terminal`` "no tracked WP → not terminal" guard.
+    gathered.all_packages_acceptable = bool(gathered.work_packages) and all(
+        is_acceptable_ending(state.lane, has_provenance=state.has_operator_provenance) for state in gathered.work_packages
+    )
+    return gathered
+
+
 def collect_feature_summary(
     repo_root: Path,
     feature: str,
@@ -1436,80 +1502,42 @@ def collect_feature_summary(
         owned=owned,
     )
 
-    lanes: dict[str, list[str]] = {lane: [] for lane in LANES}
-    work_packages: list[WorkPackageState] = []
-    metadata_issues: list[str] = []
     activity_issues: list[str] = []
     skipped_checks: list[AcceptanceCheckDiagnostic] = []
     blocked_checks: list[AcceptanceCheckDiagnostic] = []
 
-    # A non-WP workflow is vouched for by its real completed runtime and
-    # declared artifacts, never by fabricating tasks, lanes or WP state.
-    from .non_wp_runtime import collect_non_wp_runtime_summary
+    # #2122: PRIMARY-partition reads (WP tasks/, planning artifacts) must key on
+    # the canonical PRIMARY slug, not the raw handle (the already-resolved
+    # primary anchor's name; STATUS reads stay coord-aware on the raw ``feature``, C-002).
+    primary_slug = feature_dir.name
 
-    non_wp_summary = collect_non_wp_runtime_summary(
+    # A non-WP workflow is vouched for by its real completed runtime and
+    # declared artifacts, never by fabricating tasks, lanes or WP state: only
+    # the WP-specific gathering varies, everything below is shared.
+    from .non_wp_runtime import collect_non_wp_runtime_facts
+
+    non_wp = collect_non_wp_runtime_facts(
         repo_root=repo_root,
         feature_dir=feature_dir,
         status_feature_dir=status_feature_dir,
-        branch=branch,
-        worktree_root=worktree_root,
-        primary_repo_root=primary_repo_root,
-        git_dirty=git_dirty,
-        strict_metadata=strict_metadata,
+        wp_tasks_dir=_wp_tasks_read_dir(repo_root, primary_slug, owned=owned),
         owned=owned,
     )
-    if non_wp_summary is not None:
-        return non_wp_summary
-
-    snapshot_wps = _collect_snapshot_wps(feature, status_feature_dir, activity_issues)
-
-    # #2122: PRIMARY-partition reads (WP tasks/, planning artifacts) must key on
-    # the canonical PRIMARY slug, not the raw handle. A mid8/ULID/numeric handle
-    # passed straight to the kind-aware seam composes a nonexistent
-    # `kitty-specs/<handle>` dir. `feature_dir` is the already-resolved primary
-    # anchor, so its name is the canonical primary slug (which can legitimately
-    # differ from the coord read-dir name for backfilled legacy missions).
-    # STATUS reads above/below stay coord-aware on the raw `feature` (C-002).
-    primary_slug = feature_dir.name
-
-    expected_wp_ids: list[str] = []
-    canceled_wps: list[dict[str, str]] = []
-    for wp in _iter_work_packages(repo_root, primary_slug, owned=owned):
-        wp_id = wp.work_package_id or wp.path.stem
-        expected_wp_ids.append(wp_id)
-
-        wp_snapshot = snapshot_wps.get(wp_id)
-        state, wp_metadata_issues = build_work_package_state(
-            wp,
-            wp_id,
-            wp_snapshot,
-            repo_root=repo_root,
+    if non_wp is None:
+        gathered = _gather_work_packages(
+            repo_root,
+            feature,
+            primary_slug,
+            status_feature_dir,
+            activity_issues,
             strict_metadata=strict_metadata,
+            owned=owned,
         )
-        bucket_lane = state.lane
-        if bucket_lane in lanes:
-            lanes[bucket_lane].append(wp_id)
-        else:
-            lanes["planned"].append(wp_id)
-        metadata_issues.extend(wp_metadata_issues)
-        work_packages.append(state)
-
-        # FR-002/NFR-003: an operator-canceled WP is reported separately (the
-        # provenance/reason/actor/at read from the coord-surface snapshot that
-        # ``status_feature_dir`` already resolves), decided per-WP at the
-        # bucketing seam — the provenance-free lane bucket cannot carry it.
-        canceled_entry = build_canceled_wp_report(wp_id, wp_snapshot)
-        if canceled_entry is not None:
-            canceled_wps.append(canceled_entry)
-
-    _validate_wp_readiness(expected_wp_ids, snapshot_wps, status_feature_dir / EVENTS_FILENAME, activity_issues)
-
-    # Provenance-aware terminality for the FR-009 unchecked-task normalization
-    # (T007): the lane-only view cannot see whether a ``canceled`` WP is
-    # operator-authored, so decide it here from the per-WP data and thread the
-    # authoritative flag into ``_normalized_unchecked_tasks``. Mirrors the
-    # ``_all_work_packages_terminal`` "no tracked WP → not terminal" guard.
-    all_packages_acceptable = bool(work_packages) and all(is_acceptable_ending(state.lane, has_provenance=state.has_operator_provenance) for state in work_packages)
+    else:
+        gathered = _GatheredWorkPackages(lanes={lane: [] for lane in LANES})
+        activity_issues.extend(non_wp.activity_issues)
+    lanes = gathered.lanes
+    metadata_issues = gathered.metadata_issues
 
     # FR-002 (#2085): PLANNING reads (spec/plan/tasks/research/data-model/quickstart)
     # resolve the PRIMARY surface via the WP01 kind-aware seam; the STATUS reads above
@@ -1518,9 +1546,9 @@ def collect_feature_summary(
     # is split per-partition WITHOUT renaming it (additive: a new planning_read_dir).
     planning_read_dir = _planning_read_dir(repo_root, primary_slug, owned=owned)
 
-    unchecked_tasks = _find_unchecked_tasks(planning_read_dir / _tasks_file())
-    needs_clarification = _check_needs_clarification(
-        [
+    if non_wp is None:
+        unchecked_tasks = _find_unchecked_tasks(planning_read_dir / _tasks_file())
+        clarification_files = [
             planning_read_dir / "spec.md",
             planning_read_dir / "plan.md",
             planning_read_dir / "quickstart.md",
@@ -1528,7 +1556,10 @@ def collect_feature_summary(
             planning_read_dir / "research.md",
             planning_read_dir / "data-model.md",
         ]
-    )
+    else:
+        unchecked_tasks = []
+        clarification_files = [planning_read_dir / name for name in non_wp.required_artifacts]
+    needs_clarification = _check_needs_clarification(clarification_files)
     try:
         mission = get_mission_for_feature(feature_dir)
     except MissionError:
@@ -1538,6 +1569,8 @@ def collect_feature_summary(
     # set is derived from the mission's declared artifacts.optional (SSOT, FR-006)
     # instead of a drifted hardcoded list. Nothing between depended on the old order.
     missing_required, missing_optional = _missing_artifacts(planning_read_dir, mission)
+    if non_wp is not None:
+        missing_required = non_wp.missing_artifacts
 
     path_violations, path_convention_warning, dedup_tokens = evaluate_path_conventions(
         mission,
@@ -1570,17 +1603,21 @@ def collect_feature_summary(
     # at all: ``_check_lane_gates`` -> ``_evaluate_acceptance_matrix`` resolves
     # its own coord-aware surface internally (``_acceptance_matrix_read_dir``,
     # gates_core.py), independent of the PRIMARY dir passed here.
-    lane_gate_outcome = _check_lane_gates(
-        repo_root,
-        read_feature_dir,
-        branch,
-        activity_issues,
-        skipped_checks,
-        blocked_checks,
-        mutate_matrix=mutate_matrix,
-        owned=owned,
-    )
-    normalized_unchecked_tasks = _normalized_unchecked_tasks(unchecked_tasks, lanes, all_packages_acceptable=all_packages_acceptable)
+    if non_wp is None:
+        lane_gate_outcome = _check_lane_gates(
+            repo_root,
+            read_feature_dir,
+            branch,
+            activity_issues,
+            skipped_checks,
+            blocked_checks,
+            mutate_matrix=mutate_matrix,
+            owned=owned,
+        )
+    else:
+        # No code lanes, so no acceptance matrix is ever produced.
+        lane_gate_outcome = LaneGateOutcome(skip_reason=PLANNING_ARTIFACT_ONLY_SKIP_REASON)
+    normalized_unchecked_tasks = _normalized_unchecked_tasks(unchecked_tasks, lanes, all_packages_acceptable=gathered.all_packages_acceptable)
     recommended_fix_order = _build_recommended_fix_order(
         lanes=lanes,
         metadata_issues=metadata_issues,
@@ -1602,7 +1639,7 @@ def collect_feature_summary(
         worktree_root=worktree_root,
         primary_repo_root=primary_repo_root,
         lanes=lanes,
-        work_packages=work_packages,
+        work_packages=gathered.work_packages,
         metadata_issues=metadata_issues,
         activity_issues=activity_issues,
         unchecked_tasks=normalized_unchecked_tasks,
@@ -1615,7 +1652,7 @@ def collect_feature_summary(
         skipped_checks=skipped_checks,
         blocked_checks=blocked_checks,
         recommended_fix_order=recommended_fix_order,
-        canceled_wps=canceled_wps,
+        canceled_wps=gathered.canceled_wps,
         acceptance_matrix_dir=lane_gate_outcome.matrix_dir,
         acceptance_matrix_gate_skip_reason=lane_gate_outcome.skip_reason,
     )
